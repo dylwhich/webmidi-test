@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebMIDI Test</title>
+  <style type="text/css">
+  .hide {
+    display: none;
+  }
+  .match {
+    font-weight: bold;
+  }
+  </style>
+</head>
+<body>
+  <div id="support-text"><noscript>Javascript Disabled</noscript></div>
+  <div id="inputs" class="hide">Inputs:<br/><ul></ul></div>
+  <div id="outputs" class="hide">Outputs:<br/><ul></ul></div>
+  <form action="#" method="GET"><button id="rescan" onclick="midiScan(); return false;">Re-scan</button><br/><button id="set-msg-sysex">SysEx</button><br/><button id="set-msg-note">Note On</button></form>
+  <script type="text/javascript">
+    function toHex(v) {
+        return v.map(function (x) {
+          x = x + 0xFFFFFFFF + 1;  // twos complement
+          x = x.toString(16); // to hex
+          x = ("00"+x).substr(-2); // zero-pad to 8-digits
+          x = x.toUpperCase();
+          return x
+      }).join(' ')
+    }
+
+    function makeRgbSysex(r, g, b) {
+      const numLeds = 8;
+      // window.payload = [0xF0, 0x00, 0x69, 0x42, 0x01, 0x09, 0x7F, 0x00, 0x00, 0x00, 0x7F, 0x00, 0x00, 0x00, 0x7F, 0x7F, 0x00, 0x00, 0x00, 0x7F, 0x00, 0x00, 0x00, 0x7F, 0x7F, 0x00, 0x00, 0x00, 0x7F, 0x00, 0x00, 0x00, 0x7F, 0xF7]
+      var rgbSeg = [r >> 1, g >> 1, b >> 1];
+      var sysex = [0xF0, 0x00, 0x69, 0x42, 0x01, numLeds];
+      for (var i = 0; i < numLeds; i++)
+      {
+        sysex.push(...rgbSeg);
+      }
+      sysex.push(0xF7);
+      return sysex;
+    }
+    
+    function midiSendSysex(output, val) {
+      var data = window.payload;
+      if (val)
+      {
+        data = val;
+      }
+      
+      console.log("Sending MIDI: ", toHex(data));
+      var result = output.send(data);
+      console.log("Result: ", result);
+    }
+
+    function midiSetupListeners(midi) {
+      window.payload = [0xF0, 0x7D, 0x05, 0x13, 0x37, 0x04, 0x20, 0x69, 0xF7];
+      window.midiAccess = midi;
+      midi.onstatechange = (event) => {
+        console.log(event);
+        midiScan(window.midiAccess);
+      };
+
+      document.getElementById("set-msg-sysex").onclick = (event) => {
+        window.payload = [0xF0, 0x7D, 0xF7];
+        return false;
+      };
+
+      document.getElementById("set-msg-note").onclick = (event) => {
+        window.payload = [0x99, 0x28, 0x7F];
+        return false;
+      };
+    }
+
+    function midiScan() {
+      document.getElementById("support-text").innerText = ("MIDI Supported & Access Granted");
+      document.getElementById("inputs").innerHtml = "";
+
+      var inputList = document.getElementById("inputs").childNodes[2];
+      while (inputList.firstChild) {
+        inputList.removeChild(inputList.lastChild);
+      }
+      for (const input of window.midiAccess.inputs.values())
+      {
+        console.log("aaa");
+        var listItem = document.createElement("li");
+        listItem.innerText = input.name;
+        inputList.appendChild(listItem);
+        if (input.name.match(/Swadge/gi))
+        {
+          listItem.classList.add("match");
+          input.onmidimessage = (event) => {
+            console.log("MIDIMessage", event);
+          };
+        }
+      }
+      document.getElementById("inputs").classList.remove("hide");
+
+      var outputList = document.getElementById("outputs").childNodes[2];
+      while (outputList.firstChild) {
+        outputList.removeChild(outputList.lastChild);
+      }
+      for (const output of window.midiAccess.outputs.values())
+      {
+        console.log("aaa");
+        var listItem = document.createElement("li");
+        listItem.innerText = output.name;
+        outputList.appendChild(listItem);
+        if (output.name.match(/Swadge/gi))
+        {
+          listItem.classList.add("match");
+          var conBtn = document.createElement("button");
+          conBtn.innerText = "Test";
+          conBtn.onclick = (event) => {
+            midiSendSysex(output);
+          };
+          listItem.appendChild(conBtn);
+          var colPicker = document.createElement("input");
+          colPicker.setAttribute("type", "color");
+          colPicker.oninput = (event) => {
+            console.log(event.target.value);
+            var hexColor = parseInt(event.target.value.substr(1), 16);
+            var r = (hexColor >> 16) & 0xFF;
+            var g = (hexColor >> 8) & 0xFF;
+            var b = (hexColor) & 0xFF;
+            midiSendSysex(output, makeRgbSysex(r, g, b));
+          }
+          listItem.appendChild(colPicker);
+        }
+      }
+      document.getElementById("outputs").classList.remove("hide");
+    }
+
+    function midiSuccess(midi) {
+      window.midiAccess = midi;
+      midiScan();
+      midiSetupListeners(midi);
+    }
+
+    function midiFail() {
+      document.getElementById("support-text").innerText = ("MIDI Supported; Access Denied");
+      document.getElementById("inputs").classList.add("hide");
+      document.getElementById("outputs").classList.add("hide");
+    }
+
+    function midiConnect() {
+      if (navigator.requestMIDIAccess)
+      {
+        navigator.requestMIDIAccess({name: "Swadge Connector", sysex: true}).then(midiSuccess, midiFail);
+      }
+      else
+      {
+        document.getElementById("support-text").innerText = ("MIDI Not Supported in this browser");
+      }
+    }
+
+    midiConnect();
+  </script>
+</body>
+</html>
