@@ -10,15 +10,24 @@
     font-weight: bold;
   }
   </style>
+  <script type="text/javascript" src="/webmidi/heatshrink.js"></script>
 </head>
 <body>
   <div id="support-text"><noscript>Javascript Disabled</noscript></div>
   <div id="inputs" class="hide">Inputs:<br/><ul></ul></div>
   <div id="outputs" class="hide">Outputs:<br/><ul></ul></div>
-  <form action="#" method="GET"><button id="rescan" onclick="midiScan(); return false;">Re-scan</button><br/><button id="set-msg-sysex">SysEx</button><br/><button id="set-msg-note">Note On</button></form>
+  <form action="#" method="GET" enctype="'multipart/form-data">
+    <button id="rescan" onclick="midiScan(); return false;">Re-scan</button><br/>
+    <button id="set-msg-sysex">SysEx</button><br/>
+    <button id="set-msg-note">Note On</button><br/>
+    <input id="upload" type="file" accept="application/octet-stream" name="files" size="30"/><br/>
+    <textarea class="form-control" rows="35" cols="120" id="upload_file"></textarea>
+    <img id="upload_img" src="#"/>
+    <canvas style="display: none;" id="secondaryCanvas"></canvas>
+  </form>
   <script type="text/javascript">
     function toHex(v) {
-        return v.map(function (x) {
+        return Array.from(v).map(function (x) {
           x = x + 0xFFFFFFFF + 1;  // twos complement
           x = x.toString(16); // to hex
           x = ("00"+x).substr(-2); // zero-pad to 8-digits
@@ -50,6 +59,26 @@
       console.log("Sending MIDI: ", toHex(data));
       var result = output.send(data);
       console.log("Result: ", result);
+    }
+
+    function midiSendSampleDump(output, deviceId, sampleNum, format, rateHz, sampleCount) {
+      var rateNs = Math.floor(1000000000 / rateHz);
+      var sysex = [
+        0xF0, // SysEx Start
+        0x7E, // Non-Realtime
+        (deviceId & 0x7F), // Device ID
+        0x01, // Sub-ID 1
+        sampleNum & 0x7F, (sampleNum >> 7) & 0x7F, // Sample Number
+        format & 0x7F, // Bits-per-ord
+        rateNs & 0x7F, (rateNs >> 7) & 0x7F, (rateNs >> 14) & 0x7F, // Inverse sample rate in nanoseconds
+        sampleCount & 0x7F, (sampleCount >> 7) & 0x7F, (sampleCount >> 14) & 0x7F, // Total number of samples (words)
+        0, 0, 0, // Loop start
+        0, 0, 0, // Loop end
+        0x7F, // Loop type (Off)
+        0xF7, // EOX
+      ];
+
+      midiSendSysex(output, sysex);
     }
 
     function midiSetupListeners(midi) {
@@ -90,6 +119,10 @@
           listItem.classList.add("match");
           input.onmidimessage = (event) => {
             console.log("MIDIMessage", event);
+            if (event.data)
+            {
+              console.log("Received MIDI: ", toHex(event.data));
+            }
           };
         }
       }
@@ -125,6 +158,13 @@
             midiSendSysex(output, makeRgbSysex(r, g, b));
           }
           listItem.appendChild(colPicker);
+
+          var sendSampleBtn = document.createElement("button");
+          sendSampleBtn.innerText = "Sample Dump";
+          sendSampleBtn.onclick = (event) => {
+            midiSendSampleDump(output, 0x7F, 1337, 8, 16384, 0x69);
+          };
+          listItem.appendChild(sendSampleBtn);
         }
       }
       document.getElementById("outputs").classList.remove("hide");
@@ -154,6 +194,130 @@
     }
 
     midiConnect();
+  </script>
+  <script type="text/javascript">
+    function CLAMP(val, low, high) {
+      if (val < low) {
+        return low;
+      }
+      else if (val > high)
+      {
+        return high;
+      }
+      else
+      {
+        return val;
+      }
+    }
+    function handleFileSelect(evt) {
+      console.info("[Event] file chooser");
+
+      // use the 1st file from the list
+      let file = evt.target.files[0];
+
+      let reader = new FileReader();
+
+      let displayFile = (e) => {
+        // set the contents of the <textarea>
+        console.info(". . got: ", e.target.result.length, e);
+        
+        document.getElementById("upload_file").innerHTML = e.target.result;
+      };
+
+      let onReaderLoad = (fl)  => {
+          console.info(". file reader load", fl);
+          return displayFile;
+      };
+
+      let displayImage = (e) => {
+        //var img = new Image();
+        var img = document.getElementById("upload_img");
+        img.onload = function () {
+            console.log(this);
+            var canvas = document.getElementById("secondaryCanvas");
+            canvas.width = this.naturalWidth;
+            canvas.height = this.naturalHeight;
+            
+            var ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0);
+            
+            var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            console.log(imageData);
+
+            var image8b = new Uint8Array(4 + canvas.width * canvas.height);
+
+            image8b[0] = (canvas.width >> 8) & 0xFF;
+            image8b[1] = (canvas.width) & 0xFF;
+            image8b[2] = (canvas.height >> 8) & 0xFF;
+            image8b[3] = (canvas.height) & 0xFF;
+
+            for (let y = 0; y < canvas.height; y++)
+            {
+              for (let x = 0; x < canvas.width; x++)
+              {
+                var sourceA = imageData[4 * y * canvas.width + 4 * x + 3];
+                if (sourceA > 0)
+                {
+                  var sourceR = imageData[4 * y * canvas.width + 4 * x];
+                  var sourceG = imageData[4 * y * canvas.width + 4 * x + 1];
+                  var sourceB = imageData[4 * y * canvas.width + 4 * x + 2];
+                  var r = CLAMP((127 + ((sourceR) * 5)) / 255, 0, 5);
+                  var g = CLAMP((127 + ((sourceG) * 5)) / 255, 0, 5);
+                  var b = CLAMP((127 + ((sourceB) * 5)) / 255, 0, 5);
+
+                  image8b[4 + y * canvas.width + x] = (r * 36) + (g * 6) + b;
+                }
+                else
+                {
+                  image8b[4 + y * canvas.width + x] = 6 * 6 * 6;
+                }
+              }
+            }
+
+            console.log("made into a palette image!", image8b);
+
+            let compressedImg = heatshrink_compress(image8b);
+
+            image8b = null;
+
+            let finalImg = new Uint8Array(compressedImg.length + 4);
+            finalImg[0] = (compressedImg.length >> 24) & 0xFF;
+            finalImg[1] = (compressedImg.length >> 16) & 0xFF;
+            finalImg[2] = (compressedImg.length >> 8) & 0xFF;
+            finalImg[3] = (compressedImg.length) & 0xFF;
+            for (var i = 0; i < compressedImg.length; i++)
+            {
+              finalImg[i + 4] = compressedImg[i];
+            }
+
+            console.log(compressedImg);
+            console.log("Final", finalImg);
+        };
+        //img.src = src;
+        img.src = e.target.result;
+      }
+
+      let onImageLoad = (fl) => {
+        return displayImage;
+      }
+
+      if (file.type == "image/png" || file.type == "image/gif" || file.type == "image/jpeg")
+      {
+        reader.onload = onImageLoad(file);
+        reader.readAsDataURL(file);
+      }
+      else
+      {
+        // Closure to capture the file information.
+        reader.onload = onReaderLoad(file);
+
+        // Read the file as text.
+        reader.readAsText(file);
+      }
+    }
+
+    // add a function to call when the <input type=file> status changes, but don't "submit" the form
+    document.getElementById("upload").addEventListener("change", handleFileSelect, false );
   </script>
 </body>
 </html>
