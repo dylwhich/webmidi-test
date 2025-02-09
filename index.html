@@ -11,6 +11,7 @@
   }
   </style>
   <script type="text/javascript" src="/webmidi/heatshrink.js"></script>
+  <script type="text/javascript" src="/webmidi/sampledump.js"></script>
 </head>
 <body>
   <div id="support-text"><noscript>Javascript Disabled</noscript></div>
@@ -117,13 +118,30 @@
         if (input.name.match(/Swadge/gi))
         {
           listItem.classList.add("match");
-          input.onmidimessage = (event) => {
+          input.addEventListener("midimessage", (event) => {
             console.log("MIDIMessage", event);
             if (event.data)
             {
               console.log("Received MIDI: ", toHex(event.data));
             }
+          });
+
+          if (!window.swadgeMidiIn)
+          {
+            window.swadgeMidiIn = input;
+          }
+
+          var sendFileBtn = document.createElement("button");
+          sendFileBtn.innerText = "Send Uploaded File";
+          sendFileBtn.onclick = (event) => {
+            if (window.swadgeFileData)
+            {
+              window.midiFileTransfer = new SampleDump(window.swadgeMidiIn, window.swadgeMidiOut, function() { alert("Done!"); });
+              midiSendFileDump(window.swadgeFileData, window.swadgeFile);
+              //midiSendSampleDump(output, 0x7F, 1337, 8, 16384, 0x69);
+            }
           };
+          listItem.appendChild(sendFileBtn);
         }
       }
       document.getElementById("inputs").classList.remove("hide");
@@ -147,6 +165,7 @@
             midiSendSysex(output);
           };
           listItem.appendChild(conBtn);
+          
           var colPicker = document.createElement("input");
           colPicker.setAttribute("type", "color");
           colPicker.oninput = (event) => {
@@ -165,6 +184,11 @@
             midiSendSampleDump(output, 0x7F, 1337, 8, 16384, 0x69);
           };
           listItem.appendChild(sendSampleBtn);
+
+          if (!window.swadgeMidiOut)
+          {
+            window.swadgeMidiOut = output;
+          }
         }
       }
       document.getElementById("outputs").classList.remove("hide");
@@ -222,6 +246,10 @@
         console.info(". . got: ", e.target.result.length, e);
         
         document.getElementById("upload_file").innerHTML = e.target.result;
+
+      window.swadgeFileName = e.target.name;
+      window.swadgeFileData = e.target.result;
+      window.swadgeFileType = "BIN ";
       };
 
       let onReaderLoad = (fl)  => {
@@ -292,6 +320,10 @@
 
             console.log(compressedImg);
             console.log("Final", finalImg);
+
+            window.swadgeFileName = file.name;
+            window.swadgeFileData = finalImg;
+            window.swadgeFileType = "WSG ";
         };
         //img.src = src;
         img.src = e.target.result;
