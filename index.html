@@ -119,11 +119,11 @@
         {
           listItem.classList.add("match");
           input.addEventListener("midimessage", (event) => {
-            console.log("MIDIMessage", event);
+            /*console.log("MIDIMessage", event);
             if (event.data)
             {
               console.log("Received MIDI: ", toHex(event.data));
-            }
+            }*/
           });
 
           if (!window.swadgeMidiIn)
@@ -136,8 +136,8 @@
           sendFileBtn.onclick = (event) => {
             if (window.swadgeFileData)
             {
-              window.midiFileTransfer = new SampleDump(window.swadgeMidiIn, window.swadgeMidiOut, function() { alert("Done!"); });
-              midiSendFileDump(window.swadgeFileData, window.swadgeFile);
+              window.midiFileTransfer = new SampleDump(window.swadgeMidiIn, window.swadgeMidiOut, function() { console.log("Done!"); });
+              window.midiFileTransfer.sendFile(window.swadgeFileData, window.swadgeFileType, window.swadgeFileName);
               //midiSendSampleDump(output, 0x7F, 1337, 8, 16384, 0x69);
             }
           };
@@ -283,17 +283,17 @@
             {
               for (let x = 0; x < canvas.width; x++)
               {
-                var sourceA = imageData[4 * y * canvas.width + 4 * x + 3];
+                var sourceA = imageData.data[4 * y * canvas.width + 4 * x + 3];
                 if (sourceA > 0)
                 {
-                  var sourceR = imageData[4 * y * canvas.width + 4 * x];
-                  var sourceG = imageData[4 * y * canvas.width + 4 * x + 1];
-                  var sourceB = imageData[4 * y * canvas.width + 4 * x + 2];
-                  var r = CLAMP((127 + ((sourceR) * 5)) / 255, 0, 5);
-                  var g = CLAMP((127 + ((sourceG) * 5)) / 255, 0, 5);
-                  var b = CLAMP((127 + ((sourceB) * 5)) / 255, 0, 5);
+                  var sourceR = imageData.data[4 * y * canvas.width + 4 * x];
+                  var sourceG = imageData.data[4 * y * canvas.width + 4 * x + 1];
+                  var sourceB = imageData.data[4 * y * canvas.width + 4 * x + 2];
+                  var r = CLAMP(Math.floor((((sourceR) * 5)) / 255), 0, 5);
+                  var g = CLAMP(Math.floor((((sourceG) * 5)) / 255), 0, 5);
+                  var b = CLAMP(Math.floor((((sourceB) * 5)) / 255), 0, 5);
 
-                  image8b[4 + y * canvas.width + x] = (r * 36) + (g * 6) + b;
+                  image8b[4 + y * canvas.width + x] = (r * 36) + (g * 6) + (b);
                 }
                 else
                 {
@@ -304,7 +304,7 @@
 
             console.log("made into a palette image!", image8b);
 
-            let compressedImg = heatshrink_compress(image8b);
+            /*let compressedImg = heatshrink_compress(image8b);
 
             image8b = null;
 
@@ -319,10 +319,10 @@
             }
 
             console.log(compressedImg);
-            console.log("Final", finalImg);
+            console.log("Final", finalImg);*/
 
             window.swadgeFileName = file.name;
-            window.swadgeFileData = finalImg;
+            window.swadgeFileData = image8b;
             window.swadgeFileType = "WSG ";
         };
         //img.src = src;

@@ -20,6 +20,17 @@ function makeNak(deviceId, packetId) {
     ]
 }
 
+function makeCancel(deviceId) {
+    return [
+        0xF0,
+        0x7E,
+        (deviceId & 0x7F),
+        0x7D, // Sub-ID 1 (NAK)
+        0, // Packet ID (ignored)
+        0xF7, // EOX
+    ];
+}
+
 function makeSampleHeader(deviceId, sampleNum, format, rateHz, sampleCount, data) {
     let rateNs = Math.floor(1000000000 / rateHz);
     return [
@@ -46,9 +57,10 @@ function makeFileHeader(deviceId, fileName, fileType, data) {
     let sysex = [
         0xF0,
         0x7E,
-        (deviceId & 0x7F),
+        0x7F, // deviceId
         0x07, // Sub-ID 1 (File Dump)
         0x01, // Sub-ID 2 (Header)
+        (deviceId & 0x7F), // OUR deviceId
         typeData.codePointAt(0) & 0x7F,
         typeData.codePointAt(1) & 0x7F,
         typeData.codePointAt(2) & 0x7F,
@@ -80,7 +92,7 @@ function encodeSampleBytes(data) {
     return data;
 }
 
-function makeSampleData(seq, data) {
+function makeSampleData(seq, deviceId, data) {
     let sysex = [
         0xF0,
         0x7E,
@@ -99,26 +111,31 @@ function makeSampleData(seq, data) {
 }
 
 function encodeFileBytes(data) {
-    if (data.length > 7) {
-        throw "Too much data for bytes";
-    }
-
-    let result = [0];
+    let result = [];
 
     for (var i = 0; i < data.length; i++) {
+        if ((i % 7) == 0) {
+            result.push(0);
+        }
         // get the top bit for the i-th byte
         let topBit = (data[i] >> 7) & 0x1;
-        result[0] |= (topBit << (6 - i));
+        result[Math.floor(i / 7) * 8] |= (topBit << (6 - (i % 7)));
+        //console.log("result[%d] |= (%d << (%d) == ", Math.floor(i / 7) * 8, topBit, (6 - (i % 7)), (topBit << (6 - (i & 7))));
         result.push(data[i] & 0x7F);
     }
+
+    console.log("Encoded file data", toHex(data), "into", toHex(result));
 
     return result;
 }
 
-function makeFileData(seq, data) {
-    if (data.length > 128) {
-        throw "Too much data for one file!";
+function makeFileData(seq, deviceId, data) {
+    if (data.length > 112) {
+        console.log("too big!!!!", data.length);
+        throw "Too much data for one file data packet: " + (data.length);
     }
+    
+    let encodedData = encodeFileBytes(data);
 
     let sysex = [
         0xF0,
@@ -127,10 +144,10 @@ function makeFileData(seq, data) {
         0x07, // SubID
         0x02, // SubID 2
         seq & 0x7F,
-        data.length - 1, // Data length, minus one
+        encodedData.length - 1, // Data length, minus one
     ];
 
-    sysex.push(...encodeFileBytes(data));
+    sysex.push(...encodedData);
 
     // Checksum
     sysex.push(getChecksum(sysex.slice(1)));
@@ -140,8 +157,14 @@ function makeFileData(seq, data) {
     return sysex;
 }
 
-function chunkFileData(data) {
-    
+function dataStartsWith(data, prefix) {
+    for (var i = 0; i < prefix.length && i < data.length; i++) {
+        if (prefix[i] >= 0 && data[i] !== prefix[i]) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 class SampleDump {
@@ -162,10 +185,12 @@ class SampleDump {
     sampleRate;
 
     expectedPacketCount;
+    headerAcked = false;
     // the total accumulated rollover of packet sequence numbers
     rollover = 0;
     // the sequence number of the last sent packet. incremented on ACK receipt
     seqNum = 0;
+    retries = 0;
     
     onComplete;
     
@@ -173,13 +198,10 @@ class SampleDump {
         this.input = input;
         this.output = output;
 
+        let self = this;
         if (this.input) {
-            this.input.addEventListener("midimessage", (event) => {
-                console.log("MIDIMessage", event);
-                if (event.data)
-                {
-                    console.log("Sample Dump received: ", toHex(event.data));
-                }
+            this.input.addEventListener("midimessage", (evt) => {
+                self.onReceive(evt);
             });
         }
 
@@ -195,28 +217,98 @@ class SampleDump {
 
     onReceive(evt) {
         console.log("SampleDump got event", evt);
+        console.log("this", this);
+        if (evt.data) {
+            // negative values can be anything
+            const ackMatch = [0xF0, 0x7E, -1, 0x7F];
+            const nakMatch = [0xF0, 0x7E, -1, 0x7E];
+
+            if (dataStartsWith(evt.data, ackMatch)) {
+                console.log("matched ACK");
+                let ackNumber = evt.data[4];
+                console.log("ack is for", ackNumber);
+
+                if (ackNumber == this.seqNum) {
+                    if (this.headerAcked) {
+                        // don't increment the packet number until the header is acked
+                        this.retries = 0;
+                        this.seqNum++;
+                        if (this.seqNum == 128) {
+                            this.seqNum = 0;
+                            this.rollover += 128;
+                        }
+                    } else {
+                        console.log("acking header");
+                        this.headerAcked = true;
+                    }
+                    this.sendChunkNumber(this.rollover + this.seqNum);
+
+                    if (this.seqNum + this.rollover >= this.expectedPacketCount) {
+                        this.onComplete();
+                    }
+                } else {
+                    console.log("ack number (", ackNumber, ") did not match number expected:", this.seqNum);
+                }
+            }
+            else if (dataStartsWith(evt.data, nakMatch)) {
+                console.log("matched NAK");
+                let nakNumber = evt.data[4];
+
+                this.retries++;
+
+                if (this.retries > 3) {
+                    this.send(makeCancel(this.deviceId));
+                } else {
+                    this.sendChunkNumber(this.rollover + this.seqNum);
+                }
+            } else {
+                console.log("Matched nothing");
+            }
+        }
+    }
+
+    sendChunkNumber(chunkNumber) {
+        console.log("sending chunk", chunkNumber);
+        if (this.isFile) {
+            console.log("isFile");
+            if (chunkNumber < this.expectedPacketCount) {
+                console.log("packetNumberLess");
+                // ok cool
+                let packet = makeFileData(this.seqNum, this.deviceId, this.chunks[chunkNumber]);
+                this.send(packet);
+            }
+        }
     }
 
     sendFile(data, type, name) {
         console.log("Sending file!");
 
-        // 1. Chunkify the data
-        let totalChunks = Math.ceil(data.length / 128);
+        // 1. Chunkify the data (112 bytes turns into 128 bytes after encoding)
+        let totalChunks = Math.ceil(data.length / 112);
         for (var i = 0; i < totalChunks; i++) {
-            var chunkLen = 128;
-            if ((i + 1) * 128 >= data.length) {
-                chunkLen = data.length - (i * 128);
+            var chunkLen = 112;
+            if ((i + 1) * 112 >= data.length) {
+                chunkLen = data.length - (i * 112);
             }
             
-            this.chunks.push(new Uint8Array(encodeFileBytes(data.slice(i * 128, i * 128 + chunkLen))));
+            this.chunks.push(new Uint8Array(data.slice(i * 112, i * 112 + chunkLen)));
         }
 
         console.log("Made chunks:", this.chunks);
 
         this.seqNum = 0;
         this.rollover = 0;
+        this.retries = 0;
+        this.headerAcked = false;
+        this.isFile = true;
+        this.expectedPacketCount = totalChunks;
         
-        this.output.send(makeFileHeader(this.deviceId, name, type, data));
+        this.send(makeFileHeader(this.deviceId, name, type, data));
+    }
+
+    send(data) {
+        console.log("SampleDump sending message:", toHex(data));
+        this.output.send(data);
     }
 
     sendSample(data, format, number, rateHz) {
